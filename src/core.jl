@@ -104,6 +104,7 @@ function serve(ctx::Context;
     schema_path = "/schema",
     external_url = nothing,
     revise      = :none, # :none, :lazy, :eager
+    is_prioritized = nothing,
     kwargs...) :: Server
 
     # set the external url if it's passed
@@ -152,7 +153,7 @@ function serve(ctx::Context;
         end
 
         # wrap top level handler with parallel handler
-        handle_stream = parallel_stream_handler(handle_stream)
+        handle_stream = parallel_stream_handler(handle_stream, is_prioritized)
     end
 
     if revise == :eager
@@ -271,13 +272,20 @@ end
 This function uses `Threads.@spawn` to schedule a new task on any available thread. 
 Inside this task, `@async` is used for cooperative multitasking, allowing the task to yield during I/O operations. 
 """
-function parallel_stream_handler(handle_stream::Function)
+function parallel_stream_handler(handle_stream::Function, is_prioritized::Function)
     function (stream::HTTP.Stream)
-        task = Threads.@spawn begin
-            handle = @async handle_stream(stream)
-            wait(handle)
+        req::HTTP.Request = stream.message
+
+        # if prioritized path
+        if (is_prioritized(req))
+            handle_stream(stream)
+        else
+            task = Threads.@spawn begin
+                handle = @async handle_stream(stream)
+                wait(handle)
+            end
+            wait(task)
         end
-        wait(task)
     end
 end
 
